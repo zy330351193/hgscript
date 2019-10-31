@@ -165,7 +165,7 @@ class PgpoolConfigure():
         sf.exec_command(
             r'export PATH=$PATH:$PGHOME/bin:{0}/bin;export LD_LIBRARY_PATH={0}/lib:$LD_LIBRARY_PATH;{0}/bin/pg_ctl start -D {0}/data'.format(
                 self.pgpath))
-        time.sleep(1)
+        time.sleep(3)
         res = sf.exec_command(
             'export LD_LIBRARY_PATH={0}/lib:$LD_LIBRARY_PATH;{0}/bin/pg_isready -d {0}/data'.format(self.pgpath))
         check_exec_command(res, 'accepting connections', '%s数据库启动成功' % server[0], '%s数据库启动失败' % server[0])
@@ -284,7 +284,7 @@ class PgpoolConfigure():
         sf.exec_command(
             sed_replace("#heartbeat_destination_port1 = 9694", "heartbeat_destination_port1 = 9694", pgpool_conf))
         sf.exec_command(sed_replace("#heartbeat_device1 = ''", "heartbeat_device1 = ''", pgpool_conf))
-        sf.exec_command(sed_replace("log_destination = 'stderr'", "log_destination = 'syslog'", pgpool_conf))
+        sf.exec_command(sed_replace("log_destination = 'stderr'", "log_destination = 'stderr,syslog'", pgpool_conf))
         sf.exec_command(sed_replace("syslog_facility = 'LOCAL0'", "syslog_facility = 'LOCAL1'", pgpool_conf))
         sf.exec_command(sed_replace("pid_file_name = '/var/run/pgpool/pgpool.pid'",
                                     "pid_file_name = '%s/pgpool.pid'" % self.pgpoolpath, pgpool_conf))
@@ -306,6 +306,10 @@ class PgpoolConfigure():
         '''此方法用于修改postgresql.conf文件和pg_hba.conf文件'''
         sf = self.ssh_connectionServer(*server)
         postgresql_conf = self.pgpath + '/data/postgresql.conf'
+
+
+
+        sf.exec_command(sed_replace("#logging_collector = off", "logging_collector = on", postgresql_conf))
         sf.exec_command(sed_replace("#listen_addresses = 'localhost'", "listen_addresses = '*'", postgresql_conf))
         sf.exec_command(sed_replace("#archive_mode = off", "archive_mode = on", postgresql_conf))
         # 创建归档日志需要的文件夹
@@ -314,7 +318,6 @@ class PgpoolConfigure():
             sed_replace("#archive_command = ''", "archive_command ='cp %p {}/archivedir/%f'".format(self.pgpath),
                         postgresql_conf))
         sf.exec_command(sed_replace("#max_wal_senders = 10", "max_wal_senders = 10", postgresql_conf))
-
         # pg_hba.conf需要修改一个参数，就不单独写方法，添加到此方法一起就行了
         # 要配置子网掩码，将VIP拆分,IP的主机号变为0
         ip_list = parameters['delegate_ip'].split('.')[0:3]
@@ -326,6 +329,14 @@ class PgpoolConfigure():
         sf.exec_command(
             'echo "host    all             all             0.0.0.0/0            trust" >> {1}/data/pg_hba.conf'.format(
                 netaddress, self.pgpath))
+        #数据库参数修改后重启生效
+        _,_,_=sf.exec_command(
+            r'export PATH=$PATH:$PGHOME/bin:{0}/bin;export LD_LIBRARY_PATH={0}/lib:$LD_LIBRARY_PATH;{0}/bin/pg_ctl restart -D {0}/data'.format(
+                self.pgpath),timeout=3)
+        time.sleep(2)
+        res = sf.exec_command(
+            'export LD_LIBRARY_PATH={0}/lib:$LD_LIBRARY_PATH;{0}/bin/pg_isready -d {0}/data'.format(self.pgpath))
+        check_exec_command(res, 'accepting connections', '%s数据库重启成功' % server[0], '%s数据库重启失败' % server[0])
 
         sf.close()
 
@@ -336,6 +347,7 @@ class PgpoolConfigure():
                                   '%s/data/recovery_1st_stage' % self.pgpath, 2, *server)
         self.ftp_connectionServer(r'%s\pgpool_remote_start' % parameters['shell_script_path'],
                                   '%s/data/pgpool_remote_start' % self.pgpath, 2, *server)
+
 
         # 检查脚本是否创建成功
         sf = self.ssh_connectionServer(*server)
@@ -362,7 +374,15 @@ class PgpoolConfigure():
         check_exec_command(res, 'exit 0', '%s创建脚本3成功' % server[0], '%s创建脚本3失败' % server[0])
         res = sf.exec_command('cat %s/etc/follow_master.sh' % self.pgpoolpath)
         check_exec_command(res, 'exit 0', '%s创建脚本4成功' % server[0], '%s创建脚本4失败' % server[0])
+
+        #因上传的shell脚本文件是dos格式，即每一行结尾以\r\n，在linux下执行需将其替换为\n
+        sf.exec_command(sed_replace('\r','','%s/data/recovery_1st_stage'%self.pgpath))
+        sf.exec_command(sed_replace('\r','','%s/data/pgpool_remote_start'%self.pgpath))
+        sf.exec_command(sed_replace('\r','','%s/etc/failover.sh'%self.pgpoolpath))
+        sf.exec_command(sed_replace('\r','','%s/etc/follow_master.sh'%self.pgpoolpath))
         sf.close()
+
+
 
     def create_extension(self, *server):
         '''主节点创建扩展'''
@@ -403,18 +423,14 @@ class PgpoolConfigure():
         主函数，确定哪些方法需要被调用
         *server=(ip,username,passwd)
         '''
-        self.check_data_status(*server)
-        self.create_passwd_file(*server)
 
-        # server[3].acquire()
         self.basic_setting(server[0], 'root', parameters['root_password'], a=parameters['primary_node_ip'],
                            b=parameters['standby01_node_ip'], c=parameters['standby02_node_ip'])
-        # server[3].release()
-
+        self.create_passwd_file(*server)
         self.change_pgpool_conf_parameters(server[0], 'root', parameters['root_password'],
                                            a=parameters['primary_node_ip'], b=parameters['standby01_node_ip'],
                                            c=parameters['standby02_node_ip'])
-        self.change_postgresql_conf_parameters(*server)
+
         self.create_shell_scripts(*server)
         self.create_md5(server[0], 'root', parameters['root_password'])
 
@@ -450,11 +466,17 @@ if __name__ == '__main__':
                                       parameters['pgpath'],
                                       parameters['pgpoolpath'],
                                       parameters['delegate_ip'])
-    lock = Lock()
+    jobs=[]
     for server_ip in [parameters['primary_node_ip'], parameters['standby01_node_ip'], parameters['standby02_node_ip']]:
         p = Process(target=pgpoolconfiguer.main,
-                    args=(server_ip, parameters['dbusername'], parameters['dbpasswd'], lock))
+                    args=(server_ip, parameters['dbusername'], parameters['dbpasswd']))
 
         p.start()
+        jobs.append(p)
+    for _ in jobs:
+        p.join()
 
+    #只对主控做的一些配置
+    pgpoolconfiguer.check_data_status(parameters['primary_node_ip'],parameters['dbusername'], parameters['dbpasswd'])
+    pgpoolconfiguer.change_postgresql_conf_parameters(parameters['primary_node_ip'],parameters['dbusername'], parameters['dbpasswd'])
     pgpoolconfiguer.create_extension(parameters['primary_node_ip'], parameters['dbusername'], parameters['dbpasswd'])
