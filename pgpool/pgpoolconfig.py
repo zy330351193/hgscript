@@ -1,6 +1,6 @@
 # !/usr/bin/env python
 # coding=utf-8
-import multiprocessing
+from multiprocessing import Process, Lock
 import re
 import time
 import os
@@ -69,8 +69,10 @@ class PgpoolConfigure():
         else:
             raise Exception('未选择传输模式')
 
-    def basic_setting(self, *server):
-        '''此方法root用户登录用于改一些基础配置，如关闭防火墙，节点互信等'''
+    def basic_setting(self, *server, **three_ip):
+        '''
+        此方法root用户登录用于改一些基础配置，如关闭防火墙，节点互信等
+        '''
         sf = self.ssh_connectionServer(*server)
 
         # 关闭防火墙
@@ -78,23 +80,49 @@ class PgpoolConfigure():
         sf.exec_command('service firewalld stop')
         sf.exec_command('systemctl disable firewalld.service')
 
-
-        # 此步操作还未验证是否可行！！！！！！！！！！！！！！！！
-        sf.exec_command('ssh-keygen -t rsa')
-        sf.exec_command('ssh-copy-id -i  .ssh/id_rsa.pub root@192.168.222.142')
-        # !!!!!!!!!!!!!!!!!!!!!!!!
-
-        sf.exec_command(r'export PATH={0}/bin:{1}/bin:$PATH'.format(self.pgpath, self.pgpoolpath))
-        sf.exec_command('source /etc/profile')
-        # 创建所需文件，wal归档文件夹后面方法单独创建
+        # 创建所需文件，其中wal归档文件夹后面方法单独创建
         sf.exec_command('chmod 777 %s' % self.pgpath)
         sf.exec_command('mkdir {0}/log/ && touch {0}/log/pgpool.log'.format(self.pgpoolpath))
-        sf.exec_command("echo 'localhost:9898:pgpool:pgpool' > ~/.pcppass")
-        sf.exec_command("chmod 600 ~/.pcppass")
         sf.close()
+        # 创建root间节点互互信
+        sf = Ssh(server[0])
+        sf.connect(server[1], server[2])
+        sf.execute('rm -rf /root/.ssh/id_rsa')
+        r = sf.interact([('ssh-keygen -t rsa', 'Enter file in which to save the key (/root/.ssh/id_rsa):'),
+                         ('', 'Enter passphrase (empty for no passphrase):'),
+                         ('', 'Enter same passphrase again:'),
+                         ('', '#')])
+        for ip in three_ip.values():
+            try:
+                sf.interact([('ssh-copy-id -i  .ssh/id_rsa.pub root@%s' % ip, 'password:'),
+                             ('%s' % parameters['root_password'], '#'), ])
+            except Exception:
+                sf.interact([('ssh-copy-id -i  .ssh/id_rsa.pub root@%s' % ip, '(yes/no)'),
+                             ('yes', 'password:'),
+                             ('%s' % parameters['root_password'], '#'), ])
+            else:
+                print('root节点互信建立成功')
+        # 创建postgres间节点互互信
+        sf = Ssh(server[0])
+        sf.connect(parameters['dbusername'], parameters['dbpasswd'])
+        sf.execute('rm -rf /home/postgres/.ssh/id_rsa')
+        r = sf.interact([('ssh-keygen -t rsa', 'Enter file in which to save the key (/home/postgres/.ssh/id_rsa):'),
+                         ('', 'Enter passphrase (empty for no passphrase):'),
+                         ('', 'Enter same passphrase again:'),
+                         ('', '$')])
+        for ip in three_ip.values():
+            try:
+                sf.interact([('ssh-copy-id -i  .ssh/id_rsa.pub postgres@%s' % ip, 'password:'),
+                             ('%s' % parameters['dbpasswd'], '$'), ])
+            except Exception:
+                sf.interact([('ssh-copy-id -i  .ssh/id_rsa.pub postgres@%s' % ip, '(yes/no)'),
+                             ('yes', 'password:'),
+                             ('%s' % parameters['dbpasswd'], '$'), ])
+            else:
+                print('postgres节点互信建立成功')
 
-    def basic_setting_by_dbuser(self, *server):
-        '''此方法用postgres用户登录对一些文件进行修改'''
+    def create_passwd_file(self, *server):
+        '''此方法创建密码文件'''
         sf = self.ssh_connectionServer(*server)
         sf.exec_command('echo "{0}:5432:replication:repl:{1}" >> ~/.pgpass'.format(parameters['primary_node_ip'],
                                                                                    parameters['dbpasswd']))
@@ -103,7 +131,19 @@ class PgpoolConfigure():
         sf.exec_command('echo "{0}:5432:replication:repl:{1}" >> ~/.pgpass'.format(parameters['standby02_node_ip'],
                                                                                    parameters['dbpasswd']))
         sf.exec_command('chmod 600 ~/.pgpass')
+        res = sf.exec_command('cat ~/.pgpass')
+        check_exec_command(res, '5432:replication:repl:', '%s创建.pgpass成功' % server[0],
+                           '%s创建.pgpass失败' % server[0])
 
+        sf.close()
+
+        # root用户创建密码
+        sf = self.ssh_connectionServer(server[0], 'root', parameters['root_password'])
+        sf.exec_command("echo 'localhost:9898:pgpool:pgpool' > ~/.pcppass")
+        sf.exec_command("chmod 600 ~/.pcppass")
+        res = sf.exec_command('cat ~/.pcppass')
+        check_exec_command(res, 'localhost:9898:pgpool:pgpool', '%s创建.pcppass成功' % server[0],
+                           '%s创建.pcppass失败' % server[0])
         sf.close()
 
     def check_data_status(self, *server):
@@ -260,7 +300,6 @@ class PgpoolConfigure():
         sf.exec_command(
             'echo "host    all             {0}             0.0.0.0/0            md5">>{1}/etc/pool_hba.conf'.format(
                 parameters['dbusername'], self.pgpoolpath))
-
         sf.close()  # 关闭ssh连接对象
 
     def change_postgresql_conf_parameters(self, *server):
@@ -302,9 +341,9 @@ class PgpoolConfigure():
         sf = self.ssh_connectionServer(*server)
         sf.exec_command('chmod +x %s/data/{recovery_1st_stage,pgpool_remote_start}' % self.pgpath)
         res = sf.exec_command('cat %s/data/recovery_1st_stage' % self.pgpath)
-        check_exec_command(res, 'exit 0', '%s创建脚本成功' % server[0], '%s创建脚本失败' % server[0])
+        check_exec_command(res, 'exit 0', '%s创建脚本1成功' % server[0], '%s创建脚本1失败' % server[0])
         res = sf.exec_command('cat %s/data/pgpool_remote_start' % self.pgpath)
-        check_exec_command(res, 'exit 0', '%s创建脚本成功' % server[0], '%s创建脚本失败' % server[0])
+        check_exec_command(res, 'exit 0', '%s创建脚本2成功' % server[0], '%s创建脚本2失败' % server[0])
         sf.close()
 
 
@@ -320,9 +359,9 @@ class PgpoolConfigure():
         sf = self.ssh_connectionServer(server[0], 'root', parameters['root_password'])
         sf.exec_command('chmod +x %s/etc/{failover.sh,follow_master.sh}' % self.pgpoolpath)
         res = sf.exec_command('cat %s/etc/failover.sh' % self.pgpoolpath)
-        check_exec_command(res, 'exit 0', '%s创建脚本成功' % server[0], '%s创建脚本失败' % server[0])
+        check_exec_command(res, 'exit 0', '%s创建脚本3成功' % server[0], '%s创建脚本3失败' % server[0])
         res = sf.exec_command('cat %s/etc/follow_master.sh' % self.pgpoolpath)
-        check_exec_command(res, 'exit 0', '%s创建脚本成功' % server[0], '%s创建脚本失败' % server[0])
+        check_exec_command(res, 'exit 0', '%s创建脚本4成功' % server[0], '%s创建脚本4失败' % server[0])
         sf.close()
 
     def create_extension(self, *server):
@@ -341,22 +380,43 @@ class PgpoolConfigure():
         sf.exec_command('%s/bin/pg_md5 -u pgpool -m 123456 ' % self.pgpoolpath)
         sf.exec_command('cp {0}/etc/pcp.conf.sample {0}/etc/pcp.conf'.format(self.pgpoolpath))
 
-        _,stdout,_=sf.exec_command('%s/bin/pg_md5 123456 ' % self.pgpoolpath)
-        md5=stdout.read().decode()
-        sf.exec_command('echo "postgres:{0}" >> {1}/etc/pcp.conf'.format(md5,self.pgpoolpath))
-        sf.exec_command('echo "pgpool:{0}" >> {1}/etc/pcp.conf'.format(md5,self.pgpoolpath))
-        #检查是否创建成功
-        res=sf.exec_command('cat %s/etc/pool_passwd'%self.pgpoolpath)
-        check_exec_command(res,r'postgres:.*\n*.*pgpool:','%s创建md5成功'%server[0],'%s创建md5失败'%server[0])
-        res=sf.exec_command('cat %s/etc/pcp.conf'%self.pgpoolpath)
-        check_exec_command(res,r'postgres:.*\n*.*pgpool:','%s创建md5成功'%server[0],'%s创建md5失败'%server[0])
+        _, stdout, _ = sf.exec_command('%s/bin/pg_md5 123456 ' % self.pgpoolpath)
+        md5 = stdout.read().decode()
+        sf.exec_command('echo "postgres:{0}" >> {1}/etc/pcp.conf'.format(md5, self.pgpoolpath))
+        time.sleep(0.1)
+        sf.exec_command('echo "pgpool:{0}" >> {1}/etc/pcp.conf'.format(md5, self.pgpoolpath))
+        # 检查是否创建成功
+        res = sf.exec_command('cat %s/etc/pool_passwd' % self.pgpoolpath)
+        check_exec_command(res, r'postgres:.*\n*.*pgpool:', '%s创建md5成功' % server[0], '%s创建md5失败' % server[0])
+        res = sf.exec_command('cat %s/etc/pcp.conf' % self.pgpoolpath)
+        check_exec_command(res, r'postgres:.*\n*.*pgpool:', '%s创建md5成功' % server[0], '%s创建md5失败' % server[0])
 
-        #此方法用于交互模式下使用
+        # 此方法用于交互模式下使用
         # time.sleep(3)
         # sf = Ssh(server[0])
         # sf.connect(server[1], server[2])
         # sf.interact([('%s/bin/pg_md5 -p -m -u postgres ' % self.pgpoolpath, 'password:'), ('123456', '#')])
         # sf.interact([('%s/bin/pg_md5 -p -m -u pgpool' % self.pgpoolpath, 'password:'), ('123456', '#')])
+
+    def main(self, *server):
+        '''
+        主函数，确定哪些方法需要被调用
+        *server=(ip,username,passwd)
+        '''
+        self.check_data_status(*server)
+        self.create_passwd_file(*server)
+
+        # server[3].acquire()
+        self.basic_setting(server[0], 'root', parameters['root_password'], a=parameters['primary_node_ip'],
+                           b=parameters['standby01_node_ip'], c=parameters['standby02_node_ip'])
+        # server[3].release()
+
+        self.change_pgpool_conf_parameters(server[0], 'root', parameters['root_password'],
+                                           a=parameters['primary_node_ip'], b=parameters['standby01_node_ip'],
+                                           c=parameters['standby02_node_ip'])
+        self.change_postgresql_conf_parameters(*server)
+        self.create_shell_scripts(*server)
+        self.create_md5(server[0], 'root', parameters['root_password'])
 
 
 def sed_replace(replaced, replace, path):
@@ -390,55 +450,11 @@ if __name__ == '__main__':
                                       parameters['pgpath'],
                                       parameters['pgpoolpath'],
                                       parameters['delegate_ip'])
-    jobs4 = []
-    jobs0 = []
-    jobs1 = []
-    jobs2 = []
-    jobs3 = []
-    jobs5 = []
-    jobs6 = []
+    lock = Lock()
     for server_ip in [parameters['primary_node_ip'], parameters['standby01_node_ip'], parameters['standby02_node_ip']]:
-        p4 = multiprocessing.Process(target=pgpoolconfiguer.check_data_status,
-                                     args=(server_ip, parameters['dbusername'], parameters['dbpasswd']))
-        p0 = multiprocessing.Process(target=pgpoolconfiguer.basic_setting_by_dbuser,
-                                     args=(server_ip, parameters['dbusername'], parameters['dbpasswd']))
-        p1 = multiprocessing.Process(target=pgpoolconfiguer.basic_setting,
-                                     args=(server_ip, 'root', parameters['root_password']))
-        p2 = multiprocessing.Process(target=pgpoolconfiguer.change_pgpool_conf_parameters,
-                                     args=(server_ip, 'root', parameters['root_password']),
-                                     # args按连接ip、连接用户名、连接密码排序
-                                     kwargs={'a': parameters['primary_node_ip'], 'b': parameters['standby01_node_ip'],
-                                             'c': parameters['standby02_node_ip']})
-        p3 = multiprocessing.Process(target=pgpoolconfiguer.change_postgresql_conf_parameters,
-                                     args=(server_ip, parameters['dbusername'], parameters['dbpasswd']))
-        p5 = multiprocessing.Process(target=pgpoolconfiguer.create_shell_scripts,
-                                     args=(server_ip, parameters['dbusername'], parameters['dbpasswd']))
-        p6 = multiprocessing.Process(target=pgpoolconfiguer.create_md5,
-                                     args=(server_ip, 'root', parameters['root_password']))
-        # pgpoolconfiguer.create_md5(server_ip, 'root', parameters['root_password'])
+        p = Process(target=pgpoolconfiguer.main,
+                    args=(server_ip, parameters['dbusername'], parameters['dbpasswd'], lock))
 
-        jobs4.append(p4)
-        jobs0.append(p0)
-        jobs1.append(p1)
-        jobs2.append(p2)
-        jobs3.append(p3)
-        jobs5.append(p5)
-        jobs6.append(p6)
-        p4.start()
-        p0.start()
-        p1.start()
-        p2.start()
-        p3.start()
-        p5.start()
-        p6.start()
-
-    for job in range(3):
-        p4.join()
-        p0.join()
-        p1.join()
-        p2.join()
-        p3.join()
-        p5.join()
-        p6.join()
+        p.start()
 
     pgpoolconfiguer.create_extension(parameters['primary_node_ip'], parameters['dbusername'], parameters['dbpasswd'])

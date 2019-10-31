@@ -44,7 +44,7 @@ class Ssh(object):
         _, stdout, stderr = self.ssh.exec_command(command, timeout=timeout)
         return stdout.read().strip(), stderr.read().strip()
 
-    def interact(self, commands,term='', timeout=30):
+    def interact(self, commands, term='', timeout=5):
         """
         Execute multiple interactive commands.
         Commands format:
@@ -75,5 +75,10 @@ class Ssh(object):
             out += tout
         return out
 
-
-
+# sf = Ssh('192.168.222.141')
+# sf.connect('root', 'z1990712')
+# r=sf.interact([('ssh-keygen -t rsa' , 'Enter file in which to save the key (/root/.ssh/id_rsa):'),
+#              ('', 'Enter passphrase (empty for no passphrase):'),
+#              ('','Enter same passphrase again:'),
+#              ('','#')])
+# print(r)
