@@ -42,7 +42,7 @@ class Ssh(object):
         :return: stdout and stderr
         """
         _, stdout, stderr = self.ssh.exec_command(command, timeout=timeout)
-        return stdout.read().strip(), stderr.read().strip()
+        return stdout.read().strip().decode()+ stderr.read().strip().decode()
 
     def interact(self, commands, term='', timeout=5):
         """
