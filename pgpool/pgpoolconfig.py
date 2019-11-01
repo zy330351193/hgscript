@@ -1,14 +1,10 @@
 # !/usr/bin/env python
 # coding=utf-8
-from multiprocessing import Process, Lock
 import re
 import time
-import os
-
-import paramiko
-
+from multiprocessing import Process
+from method.RemoteConnect import ssh_connectionServer, ftp_connectionServer, Ssh
 from configuration.pgpool_parameter.parameter import parameters
-from method.Ssh import Ssh
 
 
 class PgpoolConfigure():
@@ -24,56 +20,11 @@ class PgpoolConfigure():
         self.pgpoolpath = pgpoolpath
         self.delegate_ip = delegate_ip
 
-    def ssh_connectionServer(self, *server):
-        '''创建ssh连接,返回连接对象
-        *server参数接收由连接信息组成的元组，即server=(ip,username,passwd)
-        '''
-        try:
-            # 创建SSH对象
-            sf = paramiko.SSHClient()
-            # 允许连接不在know_hosts文件中的主机
-            sf.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            # 连接服务器
-            sf.connect(hostname=server[0], port=22, username=server[1],
-                       password=server[2])
-        except Exception as e:
-            print(server[0], e)
-        return sf
-
-    def ftp_connectionServer(self, local_file, remote_file, ftpType, *server):
-        '''创建ftp对象，用于上传下载文件
-        参数含义：
-        local_file:本地文件路径
-        remote_file:远端文件路径
-        ftpType：选择传输类型，ftpType=1 单个文件从其他服务器向本地下载；ftpType=2 单个文件向服务器上传；
-        *server参数接收由连接信息组成的元组，即server=(ip,username,passwd)
-        '''
-        try:
-            # 创建ftp对象
-            sf = paramiko.Transport(server[0], 22)
-            sf.connect(username=server[1], password=server[2])
-            sftp = paramiko.SFTPClient.from_transport(sf)
-        except Exception as e:
-            print(server[0], e)
-            return False
-
-        local_path = os.path.dirname(local_file)
-        if ftpType == 1:
-            if not os.path.exists(local_path):
-                os.makedirs(local_path)
-            sftp.get(remote_file, local_file)
-            sf.close()
-        elif ftpType == 2:
-            sftp.put(local_file, remote_file)
-            sf.close()
-        else:
-            raise Exception('未选择传输模式')
-
     def basic_setting(self, *server, **three_ip):
         '''
         此方法root用户登录用于改一些基础配置，如关闭防火墙，节点互信等
         '''
-        sf = self.ssh_connectionServer(*server)
+        sf = ssh_connectionServer(*server)
 
         # 关闭防火墙
         sf.exec_command('systemctl stop firewalld.service')
@@ -88,16 +39,17 @@ class PgpoolConfigure():
         sf = Ssh(server[0])
         sf.connect(server[1], server[2])
 
-        #判断节点间是否已互信,若未互信，建立互信
+        # 判断节点间是否已互信,若未互信，建立互信
         for ip in three_ip.values():
-            res=sf.execute('ssh root@%s -o PreferredAuthentications=publickey -o StrictHostKeyChecking=no "echo SSHOK"'%ip)
-            if not re.search('SSHOK',res):
-                res=sf.execute('ls /root/.ssh/id_rsa')
-                if re.search('No such file or directory',res):
+            res = sf.execute(
+                'ssh root@%s -o PreferredAuthentications=publickey -o StrictHostKeyChecking=no "echo SSHOK"' % ip)
+            if not re.search('SSHOK', res):
+                res = sf.execute('ls /root/.ssh/id_rsa')
+                if re.search('No such file or directory', res):
                     sf.interact([('ssh-keygen -t rsa', 'Enter file in which to save the key (/root/.ssh/id_rsa):'),
-                                     ('', 'Enter passphrase (empty for no passphrase):'),
-                                     ('', 'Enter same passphrase again:'),
-                                     ('', '#')])
+                                 ('', 'Enter passphrase (empty for no passphrase):'),
+                                 ('', 'Enter same passphrase again:'),
+                                 ('', '#')])
                 try:
                     sf.interact([('ssh-copy-id -i  .ssh/id_rsa.pub root@%s' % ip, 'password:'),
                                  ('%s' % parameters['root_password'], '#'), ])
@@ -106,22 +58,24 @@ class PgpoolConfigure():
                                  ('yes', 'password:'),
                                  ('%s' % parameters['root_password'], '#'), ])
                 else:
-                    print('{0}与{1}root节点互信建立成功'.format(server[0],ip))
+                    print('{0}与{1}root节点互信建立成功'.format(server[0], ip))
             else:
-                print("{0}与{1}root节点原本已互信".format(server[0],ip))
+                print("{0}与{1}root节点原本已互信".format(server[0], ip))
         # 创建postgres间节点互互信
 
         sf = Ssh(server[0])
         sf.connect(parameters['dbusername'], parameters['dbpasswd'])
         for ip in three_ip.values():
-            res=sf.execute('ssh postgres@%s -o PreferredAuthentications=publickey -o StrictHostKeyChecking=no "echo SSHOK"'%ip)
-            if not re.search('SSHOK',res):
-                res=sf.execute('ls /home/postgres/.ssh/id_rsa')
-                if re.search('No such file or directory',res):
-                    r = sf.interact([('ssh-keygen -t rsa', 'Enter file in which to save the key (/home/postgres/.ssh/id_rsa):'),
-                                     ('', 'Enter passphrase (empty for no passphrase):'),
-                                     ('', 'Enter same passphrase again:'),
-                                     ('', '$')])
+            res = sf.execute(
+                'ssh postgres@%s -o PreferredAuthentications=publickey -o StrictHostKeyChecking=no "echo SSHOK"' % ip)
+            if not re.search('SSHOK', res):
+                res = sf.execute('ls /home/postgres/.ssh/id_rsa')
+                if re.search('No such file or directory', res):
+                    r = sf.interact(
+                        [('ssh-keygen -t rsa', 'Enter file in which to save the key (/home/postgres/.ssh/id_rsa):'),
+                         ('', 'Enter passphrase (empty for no passphrase):'),
+                         ('', 'Enter same passphrase again:'),
+                         ('', '$')])
                 try:
                     sf.interact([('ssh-copy-id -i  .ssh/id_rsa.pub postgres@%s' % ip, 'password:'),
                                  ('%s' % parameters['dbpasswd'], '$'), ])
@@ -130,13 +84,13 @@ class PgpoolConfigure():
                                  ('yes', 'password:'),
                                  ('%s' % parameters['dbpasswd'], '$'), ])
                 else:
-                    print('{0}与{1}postgres节点互信建立成功'.format(server[0],ip))
+                    print('{0}与{1}postgres节点互信建立成功'.format(server[0], ip))
             else:
-                print("{0}与{1}postgres节点原本已互信".format(server[0],ip))
+                print("{0}与{1}postgres节点原本已互信".format(server[0], ip))
 
     def create_passwd_file(self, *server):
         '''此方法创建密码文件'''
-        sf = self.ssh_connectionServer(*server)
+        sf = ssh_connectionServer(*server)
         sf.exec_command('echo "{0}:5432:replication:repl:{1}" >> ~/.pgpass'.format(parameters['primary_node_ip'],
                                                                                    parameters['dbpasswd']))
         sf.exec_command('echo "{0}:5432:replication:repl:{1}" >> ~/.pgpass'.format(parameters['standby01_node_ip'],
@@ -151,7 +105,7 @@ class PgpoolConfigure():
         sf.close()
 
         # root用户创建密码
-        sf = self.ssh_connectionServer(server[0], 'root', parameters['root_password'])
+        sf = ssh_connectionServer(server[0], 'root', parameters['root_password'])
         sf.exec_command("echo 'localhost:9898:pgpool:pgpool' > ~/.pcppass")
         sf.exec_command("chmod 600 ~/.pcppass")
         res = sf.exec_command('cat ~/.pcppass')
@@ -166,7 +120,7 @@ class PgpoolConfigure():
         创建测试表
         *server=(ip,dbusername,dbpasswd)'''
 
-        sf = self.ssh_connectionServer(*server)
+        sf = ssh_connectionServer(*server)
         # 初始化数据库,判断数据初始化是否成功
         res = sf.exec_command(
             'export LD_LIBRARY_PATH={0}/lib:$LD_LIBRARY_PATH;{0}/bin/initdb -D {0}/data'.format(self.pgpath),
@@ -216,7 +170,7 @@ class PgpoolConfigure():
         '''此方法用于修改pgpool.conf文件参数和pool_hba.conf文件
         *server接收参数为连接的服务器ip,连接的用户名，连接密码组成的元组
         '''
-        sf = self.ssh_connectionServer(*server)
+        sf = ssh_connectionServer(*server)
         # 拷贝pgpool.conf文件
         path_pgpool_conf = self.pgpoolpath + '/etc'
         sf.exec_command('cd {0};cp pgpool.conf.sample pgpool.conf '.format(path_pgpool_conf))
@@ -317,10 +271,8 @@ class PgpoolConfigure():
 
     def change_postgresql_conf_parameters(self, *server):
         '''此方法用于修改postgresql.conf文件和pg_hba.conf文件'''
-        sf = self.ssh_connectionServer(*server)
+        sf = ssh_connectionServer(*server)
         postgresql_conf = self.pgpath + '/data/postgresql.conf'
-
-
 
         sf.exec_command(sed_replace("#logging_collector = off", "logging_collector = on", postgresql_conf))
         sf.exec_command(sed_replace("#listen_addresses = 'localhost'", "listen_addresses = '*'", postgresql_conf))
@@ -342,16 +294,16 @@ class PgpoolConfigure():
         sf.exec_command(
             'echo "host    all             all             0.0.0.0/0            trust" >> {1}/data/pg_hba.conf'.format(
                 netaddress, self.pgpath))
-        #数据库参数修改后重启生效
-        stdin,stdout,stderr=sf.exec_command(
+        # 数据库参数修改后重启生效
+        stdin, stdout, stderr = sf.exec_command(
             r'export PATH=$PATH:$PGHOME/bin:{0}/bin;export LD_LIBRARY_PATH={0}/lib:$LD_LIBRARY_PATH;{0}/bin/pg_ctl stop -D {0}/data'.format(
-                self.pgpath),timeout=4)
-        #此处需打印输出才能重启，而且不能用restart，不知为何！！！
-        print(stdout.read(),stderr.read())
+                self.pgpath), timeout=4)
+        # 此处需打印输出才能重启，而且不能用restart，不知为何！！！
+        print(stdout.read(), stderr.read())
         time.sleep(1)
-        _,_,_=sf.exec_command(
+        _, _, _ = sf.exec_command(
             r'export PATH=$PATH:$PGHOME/bin:{0}/bin;export LD_LIBRARY_PATH={0}/lib:$LD_LIBRARY_PATH;{0}/bin/pg_ctl start -D {0}/data'.format(
-                self.pgpath),timeout=4)
+                self.pgpath), timeout=4)
         time.sleep(1)
         res = sf.exec_command(
             'export LD_LIBRARY_PATH={0}/lib:$LD_LIBRARY_PATH;{0}/bin/pg_isready -d {0}/data'.format(self.pgpath))
@@ -362,52 +314,50 @@ class PgpoolConfigure():
     def create_shell_scripts(self, *server):
         '''此方法用于上传所需shell脚本，前提本地需存放shell脚本'''
         # 主节点用postgres用户创建脚本
-        if server[0]==parameters['primary_node_ip']:
-            self.ftp_connectionServer(r'%s\recovery_1st_stage' % parameters['shell_script_path'],
-                                      '%s/data/recovery_1st_stage' % self.pgpath, 2, *server)
-            self.ftp_connectionServer(r'%s\pgpool_remote_start' % parameters['shell_script_path'],
-                                      '%s/data/pgpool_remote_start' % self.pgpath, 2, *server)
+        if server[0] == parameters['primary_node_ip']:
+            ftp_connectionServer(r'%s\recovery_1st_stage' % parameters['shell_script_path'],
+                                 '%s/data/recovery_1st_stage' % self.pgpath, 2, *server)
+            ftp_connectionServer(r'%s\pgpool_remote_start' % parameters['shell_script_path'],
+                                 '%s/data/pgpool_remote_start' % self.pgpath, 2, *server)
 
 
             # 检查脚本是否创建成功
-            sf = self.ssh_connectionServer(*server)
+            sf = ssh_connectionServer(*server)
             sf.exec_command('chmod +x %s/data/{recovery_1st_stage,pgpool_remote_start}' % self.pgpath)
             res = sf.exec_command('cat %s/data/recovery_1st_stage' % self.pgpath)
             check_exec_command(res, 'exit 0', '%s创建脚本1成功' % server[0], '%s创建脚本1失败' % server[0])
             res = sf.exec_command('cat %s/data/pgpool_remote_start' % self.pgpath)
             check_exec_command(res, 'exit 0', '%s创建脚本2成功' % server[0], '%s创建脚本2失败' % server[0])
-            #因上传的shell脚本文件是dos格式，即每一行结尾以\r\n，在linux下执行需将其替换为\n
-            sf.exec_command(sed_replace('\r','','%s/data/recovery_1st_stage'%self.pgpath))
-            sf.exec_command(sed_replace('\r','','%s/data/pgpool_remote_start'%self.pgpath))
+            # 因上传的shell脚本文件是dos格式，即每一行结尾以\r\n，在linux下执行需将其替换为\n
+            sf.exec_command(sed_replace('\r', '', '%s/data/recovery_1st_stage' % self.pgpath))
+            sf.exec_command(sed_replace('\r', '', '%s/data/pgpool_remote_start' % self.pgpath))
             sf.close()
 
 
 
         # 用root用户创建脚本
-        self.ftp_connectionServer(r'%s\failover.sh' % parameters['shell_script_path'],
-                                  '%s/etc/failover.sh' % self.pgpoolpath, 2, server[0], 'root',
-                                  parameters['root_password'])
-        self.ftp_connectionServer(r'%s\follow_master.sh' % parameters['shell_script_path'],
-                                  '%s/etc/follow_master.sh' % self.pgpoolpath, 2, server[0], 'root',
-                                  parameters['root_password'])
+        ftp_connectionServer(r'%s\failover.sh' % parameters['shell_script_path'],
+                             '%s/etc/failover.sh' % self.pgpoolpath, 2, server[0], 'root',
+                             parameters['root_password'])
+        ftp_connectionServer(r'%s\follow_master.sh' % parameters['shell_script_path'],
+                             '%s/etc/follow_master.sh' % self.pgpoolpath, 2, server[0], 'root',
+                             parameters['root_password'])
         # 检查脚本是否创建成功
-        sf = self.ssh_connectionServer(server[0], 'root', parameters['root_password'])
+        sf = ssh_connectionServer(server[0], 'root', parameters['root_password'])
         sf.exec_command('chmod +x %s/etc/{failover.sh,follow_master.sh}' % self.pgpoolpath)
         res = sf.exec_command('cat %s/etc/failover.sh' % self.pgpoolpath)
         check_exec_command(res, 'exit 0', '%s创建脚本3成功' % server[0], '%s创建脚本3失败' % server[0])
         res = sf.exec_command('cat %s/etc/follow_master.sh' % self.pgpoolpath)
         check_exec_command(res, 'exit 0', '%s创建脚本4成功' % server[0], '%s创建脚本4失败' % server[0])
 
-        #因上传的shell脚本文件是dos格式，即每一行结尾以\r\n，在linux下执行需将其替换为\n
-        sf.exec_command(sed_replace('\r','','%s/etc/failover.sh'%self.pgpoolpath))
-        sf.exec_command(sed_replace('\r','','%s/etc/follow_master.sh'%self.pgpoolpath))
+        # 因上传的shell脚本文件是dos格式，即每一行结尾以\r\n，在linux下执行需将其替换为\n
+        sf.exec_command(sed_replace('\r', '', '%s/etc/failover.sh' % self.pgpoolpath))
+        sf.exec_command(sed_replace('\r', '', '%s/etc/follow_master.sh' % self.pgpoolpath))
         sf.close()
-
-
 
     def create_extension(self, *server):
         '''主节点创建扩展'''
-        sf = self.ssh_connectionServer(*server)
+        sf = ssh_connectionServer(*server)
         res = sf.exec_command(
             'export LD_LIBRARY_PATH={0}/lib:$LD_LIBRARY_PATH;{0}/bin/psql -c "CREATE EXTENSION pgpool_recovery"'
                 .format(self.pgpath))
@@ -416,7 +366,7 @@ class PgpoolConfigure():
 
     def create_md5(self, *server):
         '''此方法用于生成md5加密文本'''
-        sf = self.ssh_connectionServer(*server)
+        sf = ssh_connectionServer(*server)
         sf.exec_command('%s/bin/pg_md5 -u postgres -m 123456 ' % self.pgpoolpath)
         sf.exec_command('%s/bin/pg_md5 -u pgpool -m 123456 ' % self.pgpoolpath)
         sf.exec_command('cp {0}/etc/pcp.conf.sample {0}/etc/pcp.conf'.format(self.pgpoolpath))
@@ -487,7 +437,7 @@ if __name__ == '__main__':
                                       parameters['pgpath'],
                                       parameters['pgpoolpath'],
                                       parameters['delegate_ip'])
-    jobs=[]
+    jobs = []
     for server_ip in [parameters['primary_node_ip'], parameters['standby01_node_ip'], parameters['standby02_node_ip']]:
         p = Process(target=pgpoolconfiguer.main,
                     args=(server_ip, parameters['dbusername'], parameters['dbpasswd']))
@@ -497,7 +447,8 @@ if __name__ == '__main__':
     for _ in jobs:
         p.join()
 
-    #只对主控做的一些配置
-    pgpoolconfiguer.check_data_status(parameters['primary_node_ip'],parameters['dbusername'], parameters['dbpasswd'])
-    pgpoolconfiguer.change_postgresql_conf_parameters(parameters['primary_node_ip'],parameters['dbusername'], parameters['dbpasswd'])
+    # 只对主控做的一些配置
+    pgpoolconfiguer.check_data_status(parameters['primary_node_ip'], parameters['dbusername'], parameters['dbpasswd'])
+    pgpoolconfiguer.change_postgresql_conf_parameters(parameters['primary_node_ip'], parameters['dbusername'],
+                                                      parameters['dbpasswd'])
     pgpoolconfiguer.create_extension(parameters['primary_node_ip'], parameters['dbusername'], parameters['dbpasswd'])
