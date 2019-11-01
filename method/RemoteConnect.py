@@ -1,15 +1,59 @@
 # !usr/bin/env python
 # coding: utf-8
-# author: WanCheng <zhaowcheng@163.com>
-
 import paramiko
-import time
+import os
 from datetime import datetime
 
+def ssh_connectionServer(*server):
+    '''创建ssh连接,返回连接对象
+    *server参数接收由连接信息组成的元组，即server=(ip,username,passwd)
+    '''
+    try:
+        # 创建SSH对象
+        sf = paramiko.SSHClient()
+        # 允许连接不在know_hosts文件中的主机
+        sf.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        # 连接服务器
+        sf.connect(hostname=server[0], port=22, username=server[1],
+                   password=server[2])
+    except Exception as e:
+        print(server[0], e)
+    return sf
+
+
+def ftp_connectionServer(local_file, remote_file, ftpType, *server):
+    '''创建ftp对象，用于上传下载文件
+    参数含义：
+    local_file:本地文件路径
+    remote_file:远端文件路径
+    ftpType：选择传输类型，ftpType=1 单个文件从其他服务器向本地下载；ftpType=2 单个文件向服务器上传；
+    *server参数接收由连接信息组成的元组，即server=(ip,username,passwd)
+    '''
+    try:
+        # 创建ftp对象
+        sf = paramiko.Transport(server[0], 22)
+        sf.connect(username=server[1], password=server[2])
+        sftp = paramiko.SFTPClient.from_transport(sf)
+    except Exception as e:
+        print(server[0], e)
+        return False
+
+    local_path = os.path.dirname(local_file)
+    if ftpType == 1:
+        if not os.path.exists(local_path):
+            os.makedirs(local_path)
+        sftp.get(remote_file, local_file)
+        sf.close()
+    elif ftpType == 2:
+        sftp.put(local_file, remote_file)
+        sf.close()
+    else:
+        raise Exception('未选择传输模式')
 
 class Ssh(object):
     """
     SSH Client.
+    该类主要封装了可以进行交互的方法
     """
 
     def __init__(self, host, port=22):
@@ -74,11 +118,3 @@ class Ssh(object):
             # append out
             out += tout
         return out
-
-# sf = Ssh('192.168.222.141')
-# sf.connect('root', 'z1990712')
-# r=sf.interact([('ssh-keygen -t rsa' , 'Enter file in which to save the key (/root/.ssh/id_rsa):'),
-#              ('', 'Enter passphrase (empty for no passphrase):'),
-#              ('','Enter same passphrase again:'),
-#              ('','#')])
-# print(r)
