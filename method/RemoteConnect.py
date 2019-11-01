@@ -2,8 +2,12 @@
 # coding: utf-8
 import paramiko
 import os
-from datetime import datetime
 import re
+import time
+from paramiko.client import SSHClient
+
+import datetime
+from method.Collect_Log import collect_logger
 
 def ssh_connectionServer(*server):
     '''创建ssh连接,返回连接对象
@@ -35,7 +39,6 @@ def check_exec_command(result, expect, describe_pass='符合预期', describe_fa
         raise Exception(describe_fail, result.decode())
     else:
         print(describe_pass)
-
 
 def ftp_connectionServer(local_file, remote_file, ftpType, *server):
     '''创建ftp对象，用于上传下载文件
@@ -119,9 +122,9 @@ class Ssh(object):
         out = ''
         for cmd, expect in commands:
             chan.send(cmd + '\n')
-            start = datetime.now()
+            start = datetime.datetime.now()
             tout = ''
-            while (datetime.now() - start).seconds < timeout:
+            while (datetime.datetime.now() - start).seconds < timeout:
                 if chan.recv_ready():
                     tout += str(chan.recv(1024 * 10))
                     if tout.find(expect) > -1:
@@ -134,3 +137,48 @@ class Ssh(object):
             # append out
             out += tout
         return out
+
+
+
+class SSHClient_2(SSHClient):
+    '''重写类方法，因为有的exec_command需要接收参数才能执行，目前不清楚原因,将其参数接收加入日志中'''
+
+    def exec_command(
+        self,
+        command,
+        bufsize=-1,
+        timeout=None,
+        get_pty=False,
+        environment=None,
+    ):
+        chan = self._transport.open_session(timeout=timeout)
+        if get_pty:
+            chan.get_pty()
+        chan.settimeout(timeout)
+        if environment:
+            chan.update_environment(environment)
+        chan.exec_command(command)
+        stdin = chan.makefile_stdin("wb", bufsize)
+        stdout = chan.makefile("r", bufsize)
+        stderr = chan.makefile_stderr("r", bufsize)
+        #创建日志对象，将返回值搜集到日志中
+        logger=collect_logger()
+        logger.info(stdout.read().decode())
+        logger.error(stderr.read().decode())
+        return stdin, stdout, stderr
+
+def ssh_connectionServer_2(*server):
+    '''创建SSHClient_2连接对象,返回连接对象
+    *server参数接收由连接信息组成的元组，即server=(ip,username,passwd)
+    '''
+    try:
+        # 创建SSH对象
+        sf = SSHClient_2()
+        # 允许连接不在know_hosts文件中的主机
+        sf.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        # 连接服务器
+        sf.connect(hostname=server[0], port=22, username=server[1],
+                   password=server[2])
+    except Exception as e:
+        print(server[0], e)
+    return sf
