@@ -87,39 +87,52 @@ class PgpoolConfigure():
         # 创建root间节点互互信
         sf = Ssh(server[0])
         sf.connect(server[1], server[2])
-        sf.execute('rm -rf /root/.ssh/id_rsa')
-        r = sf.interact([('ssh-keygen -t rsa', 'Enter file in which to save the key (/root/.ssh/id_rsa):'),
-                         ('', 'Enter passphrase (empty for no passphrase):'),
-                         ('', 'Enter same passphrase again:'),
-                         ('', '#')])
+
+        #判断节点间是否已互信,若未互信，建立互信
         for ip in three_ip.values():
-            try:
-                sf.interact([('ssh-copy-id -i  .ssh/id_rsa.pub root@%s' % ip, 'password:'),
-                             ('%s' % parameters['root_password'], '#'), ])
-            except Exception:
-                sf.interact([('ssh-copy-id -i  .ssh/id_rsa.pub root@%s' % ip, '(yes/no)'),
-                             ('yes', 'password:'),
-                             ('%s' % parameters['root_password'], '#'), ])
+            res=sf.execute('ssh root@%s -o PreferredAuthentications=publickey -o StrictHostKeyChecking=no "echo SSHOK"'%ip)
+            if not re.search('SSHOK',res):
+                res=sf.execute('ls /root/.ssh/id_rsa')
+                if re.search('No such file or directory',res):
+                    sf.interact([('ssh-keygen -t rsa', 'Enter file in which to save the key (/root/.ssh/id_rsa):'),
+                                     ('', 'Enter passphrase (empty for no passphrase):'),
+                                     ('', 'Enter same passphrase again:'),
+                                     ('', '#')])
+                try:
+                    sf.interact([('ssh-copy-id -i  .ssh/id_rsa.pub root@%s' % ip, 'password:'),
+                                 ('%s' % parameters['root_password'], '#'), ])
+                except Exception:
+                    sf.interact([('ssh-copy-id -i  .ssh/id_rsa.pub root@%s' % ip, '(yes/no)'),
+                                 ('yes', 'password:'),
+                                 ('%s' % parameters['root_password'], '#'), ])
+                else:
+                    print('{0}与{1}root节点互信建立成功'.format(server[0],ip))
             else:
-                print('root节点互信建立成功')
+                print("{0}与{1}root节点原本已互信".format(server[0],ip))
         # 创建postgres间节点互互信
+
         sf = Ssh(server[0])
         sf.connect(parameters['dbusername'], parameters['dbpasswd'])
-        sf.execute('rm -rf /home/postgres/.ssh/id_rsa')
-        r = sf.interact([('ssh-keygen -t rsa', 'Enter file in which to save the key (/home/postgres/.ssh/id_rsa):'),
-                         ('', 'Enter passphrase (empty for no passphrase):'),
-                         ('', 'Enter same passphrase again:'),
-                         ('', '$')])
         for ip in three_ip.values():
-            try:
-                sf.interact([('ssh-copy-id -i  .ssh/id_rsa.pub postgres@%s' % ip, 'password:'),
-                             ('%s' % parameters['dbpasswd'], '$'), ])
-            except Exception:
-                sf.interact([('ssh-copy-id -i  .ssh/id_rsa.pub postgres@%s' % ip, '(yes/no)'),
-                             ('yes', 'password:'),
-                             ('%s' % parameters['dbpasswd'], '$'), ])
+            res=sf.execute('ssh postgres@%s -o PreferredAuthentications=publickey -o StrictHostKeyChecking=no "echo SSHOK"'%ip)
+            if not re.search('SSHOK',res):
+                res=sf.execute('ls /home/postgres/.ssh/id_rsa')
+                if re.search('No such file or directory',res):
+                    r = sf.interact([('ssh-keygen -t rsa', 'Enter file in which to save the key (/home/postgres/.ssh/id_rsa):'),
+                                     ('', 'Enter passphrase (empty for no passphrase):'),
+                                     ('', 'Enter same passphrase again:'),
+                                     ('', '$')])
+                try:
+                    sf.interact([('ssh-copy-id -i  .ssh/id_rsa.pub postgres@%s' % ip, 'password:'),
+                                 ('%s' % parameters['dbpasswd'], '$'), ])
+                except Exception:
+                    sf.interact([('ssh-copy-id -i  .ssh/id_rsa.pub postgres@%s' % ip, '(yes/no)'),
+                                 ('yes', 'password:'),
+                                 ('%s' % parameters['dbpasswd'], '$'), ])
+                else:
+                    print('{0}与{1}postgres节点互信建立成功'.format(server[0],ip))
             else:
-                print('postgres节点互信建立成功')
+                print("{0}与{1}postgres节点原本已互信".format(server[0],ip))
 
     def create_passwd_file(self, *server):
         '''此方法创建密码文件'''
@@ -330,10 +343,16 @@ class PgpoolConfigure():
             'echo "host    all             all             0.0.0.0/0            trust" >> {1}/data/pg_hba.conf'.format(
                 netaddress, self.pgpath))
         #数据库参数修改后重启生效
+        stdin,stdout,stderr=sf.exec_command(
+            r'export PATH=$PATH:$PGHOME/bin:{0}/bin;export LD_LIBRARY_PATH={0}/lib:$LD_LIBRARY_PATH;{0}/bin/pg_ctl stop -D {0}/data'.format(
+                self.pgpath),timeout=4)
+        #此处需打印输出才能重启，而且不能用restart，不知为何！！！
+        print(stdout.read(),stderr.read())
+        time.sleep(1)
         _,_,_=sf.exec_command(
-            r'export PATH=$PATH:$PGHOME/bin:{0}/bin;export LD_LIBRARY_PATH={0}/lib:$LD_LIBRARY_PATH;{0}/bin/pg_ctl restart -D {0}/data'.format(
-                self.pgpath),timeout=3)
-        time.sleep(2)
+            r'export PATH=$PATH:$PGHOME/bin:{0}/bin;export LD_LIBRARY_PATH={0}/lib:$LD_LIBRARY_PATH;{0}/bin/pg_ctl start -D {0}/data'.format(
+                self.pgpath),timeout=4)
+        time.sleep(1)
         res = sf.exec_command(
             'export LD_LIBRARY_PATH={0}/lib:$LD_LIBRARY_PATH;{0}/bin/pg_isready -d {0}/data'.format(self.pgpath))
         check_exec_command(res, 'accepting connections', '%s数据库重启成功' % server[0], '%s数据库重启失败' % server[0])
@@ -342,21 +361,25 @@ class PgpoolConfigure():
 
     def create_shell_scripts(self, *server):
         '''此方法用于上传所需shell脚本，前提本地需存放shell脚本'''
-        # 用postgres用户创建脚本
-        self.ftp_connectionServer(r'%s\recovery_1st_stage' % parameters['shell_script_path'],
-                                  '%s/data/recovery_1st_stage' % self.pgpath, 2, *server)
-        self.ftp_connectionServer(r'%s\pgpool_remote_start' % parameters['shell_script_path'],
-                                  '%s/data/pgpool_remote_start' % self.pgpath, 2, *server)
+        # 主节点用postgres用户创建脚本
+        if server[0]==parameters['primary_node_ip']:
+            self.ftp_connectionServer(r'%s\recovery_1st_stage' % parameters['shell_script_path'],
+                                      '%s/data/recovery_1st_stage' % self.pgpath, 2, *server)
+            self.ftp_connectionServer(r'%s\pgpool_remote_start' % parameters['shell_script_path'],
+                                      '%s/data/pgpool_remote_start' % self.pgpath, 2, *server)
 
 
-        # 检查脚本是否创建成功
-        sf = self.ssh_connectionServer(*server)
-        sf.exec_command('chmod +x %s/data/{recovery_1st_stage,pgpool_remote_start}' % self.pgpath)
-        res = sf.exec_command('cat %s/data/recovery_1st_stage' % self.pgpath)
-        check_exec_command(res, 'exit 0', '%s创建脚本1成功' % server[0], '%s创建脚本1失败' % server[0])
-        res = sf.exec_command('cat %s/data/pgpool_remote_start' % self.pgpath)
-        check_exec_command(res, 'exit 0', '%s创建脚本2成功' % server[0], '%s创建脚本2失败' % server[0])
-        sf.close()
+            # 检查脚本是否创建成功
+            sf = self.ssh_connectionServer(*server)
+            sf.exec_command('chmod +x %s/data/{recovery_1st_stage,pgpool_remote_start}' % self.pgpath)
+            res = sf.exec_command('cat %s/data/recovery_1st_stage' % self.pgpath)
+            check_exec_command(res, 'exit 0', '%s创建脚本1成功' % server[0], '%s创建脚本1失败' % server[0])
+            res = sf.exec_command('cat %s/data/pgpool_remote_start' % self.pgpath)
+            check_exec_command(res, 'exit 0', '%s创建脚本2成功' % server[0], '%s创建脚本2失败' % server[0])
+            #因上传的shell脚本文件是dos格式，即每一行结尾以\r\n，在linux下执行需将其替换为\n
+            sf.exec_command(sed_replace('\r','','%s/data/recovery_1st_stage'%self.pgpath))
+            sf.exec_command(sed_replace('\r','','%s/data/pgpool_remote_start'%self.pgpath))
+            sf.close()
 
 
 
@@ -376,8 +399,6 @@ class PgpoolConfigure():
         check_exec_command(res, 'exit 0', '%s创建脚本4成功' % server[0], '%s创建脚本4失败' % server[0])
 
         #因上传的shell脚本文件是dos格式，即每一行结尾以\r\n，在linux下执行需将其替换为\n
-        sf.exec_command(sed_replace('\r','','%s/data/recovery_1st_stage'%self.pgpath))
-        sf.exec_command(sed_replace('\r','','%s/data/pgpool_remote_start'%self.pgpath))
         sf.exec_command(sed_replace('\r','','%s/etc/failover.sh'%self.pgpoolpath))
         sf.exec_command(sed_replace('\r','','%s/etc/follow_master.sh'%self.pgpoolpath))
         sf.close()
