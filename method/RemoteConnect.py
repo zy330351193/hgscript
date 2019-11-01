@@ -3,6 +3,7 @@
 import paramiko
 import os
 from datetime import datetime
+import re
 
 def ssh_connectionServer(*server):
     '''创建ssh连接,返回连接对象
@@ -19,6 +20,21 @@ def ssh_connectionServer(*server):
     except Exception as e:
         print(server[0], e)
     return sf
+
+def check_exec_command(result, expect, describe_pass='符合预期', describe_fail='不符合预期'):
+    '''此方法用于验证ssh_connectionServer中exec_command方法返回的结果是否符合预期
+       result：接收exec_command的返回值
+       expect:期望返回值中包含的字符串，多种期望可用 | 隔开
+       describe_fail:对不符合预期场景进行描述
+       describe_pass:对预期结果进行描述
+    '''
+    stdin, stdout, stderr = result
+    res, err = stdout.read(), stderr.read()
+    result = res + err
+    if not re.search(expect, result.decode()):
+        raise Exception(describe_fail, result.decode())
+    else:
+        print(describe_pass)
 
 
 def ftp_connectionServer(local_file, remote_file, ftpType, *server):
