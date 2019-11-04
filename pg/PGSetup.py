@@ -15,6 +15,10 @@ from multiprocessing import Process
 def send_package(local_file_path, remote_ip, username='root', passwd=''):
     '''
     此方法用于传包,将包传到/root下,并解压
+    local_file_path:本地文件路径(带文件名)
+    remote_ip:远端IP，需连接的IP
+    username:远端连接名
+    passwd:远端连接密码
     '''
     res = re.search(r'(.*)\.tar', os.path.basename(local_file_path))
     file = res.group(1)
@@ -37,6 +41,10 @@ def send_package(local_file_path, remote_ip, username='root', passwd=''):
 def compile(local_file_path, remote_ip, username='root', passwd=''):
     '''
     此方法用于编译pg源码包
+    local_file_path:本地pg源码包文件路径(带文件名)
+    remote_ip:远端IP，需连接的IP
+    username:远端连接名
+    passwd:远端连接密码
     '''
     # 因上传的包解压后无文件格式后后缀，故先将文件格式后缀去掉，便于找到文件
     res = re.search(r'(.*)\.tar', os.path.basename(local_file_path))
@@ -60,6 +68,10 @@ def compile(local_file_path, remote_ip, username='root', passwd=''):
 def compile_pgpool(local_file_path, remote_ip, username='root', passwd=''):
     '''
     此方法用于编译pg源码包
+    local_file_path:本地pgpool包文件路径(带文件名)
+    remote_ip:远端IP，需连接的IP
+    username:远端连接名
+    passwd:远端连接密码
     '''
     # 因上传的包解压后无文件格式后后缀，故先将文件格式后缀去掉，便于找到文件
     res = re.search(r'(.*)\.tar', os.path.basename(local_file_path))
@@ -102,6 +114,9 @@ def compile_pgpool(local_file_path, remote_ip, username='root', passwd=''):
 def configure(remote_ip, username, passwd):
     '''
     此方法对安装后的包进行配置，包括创建用户，设置环境变量等
+    remote_ip:远端IP，需连接的IP
+    username:远端连接名
+    passwd:远端连接密码
     '''
     sf = Ssh(remote_ip)
     # 创建用户和密码
@@ -139,9 +154,15 @@ def configure(remote_ip, username, passwd):
 
 
 def main(remote_ip, username, passwd):
-    # send_package(setup['local_package_path0'], remote_ip, username, passwd)
-    # compile(setup['local_package_path0'], remote_ip, username, passwd)
-    # configure(remote_ip, username, passwd)
+    '''
+    主函数，确定哪些方法需要运行
+    remote_ip:远端IP，需连接的IP
+    username:远端连接名
+    passwd:远端连接密码
+    '''
+    send_package(setup['local_package_path0'], remote_ip, username, passwd)
+    compile(setup['local_package_path0'], remote_ip, username, passwd)
+    configure(remote_ip, username, passwd)
     # 如果有pgpool参数则一起传包，编译
     if setup['local_package_path1']:
         send_package(setup['local_package_path1'], remote_ip, username, passwd)
