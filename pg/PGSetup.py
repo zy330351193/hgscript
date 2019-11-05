@@ -79,20 +79,12 @@ def compile_pgpool(local_file_path, remote_ip, username='root', passwd=''):
     sf = ssh_connectionServer(remote_ip, username, passwd)
     print('%s开始configure配置pgpool......' % remote_ip)
     stdin, stdout, stderr = sf.exec_command(
-        'cd {0};./configure --prefix={1} --with-pgsql={2} '.format(file, setup['pgpoolpath'], setup['pgpoolpath']))
+        'cd {0};./configure --prefix={1} --with-pgsql={2} '.format(
+            file, setup['pgpoolpath'], setup['pgpath']))
     res = stdout.read().decode() + stderr.read().decode()
-    # print('++++++++++++\n',remote_ip,res)
-    if re.search('configure: error: libpq is not installed or libpq is old',
-                 res):
-        print('%s缺少postgresql-devel组件，安装postgresql-devel组件' % remote_ip)
-        _, stdout, stderr = sf.exec_command('yum install -y postgresql\* gcc\*')
-        print(stdout.read().decode() + stderr.read().decode())
-        print('%s重新配置pgpool' % remote_ip)
-        stdin, stdout, stderr = sf.exec_command(
-            'cd {0};./configure --prefix={1} --with-pgsql={2} '.format(file, setup['pgpoolpath'], setup['pgpoolpath']))
-        res = stdout.read().decode() + stderr.read().decode()
-        if re.search('configure\s*:\s*error', res):
-            raise Exception('%s配置pgpool出错!!!!!!' % remote_ip + '\n' + res)
+
+    if re.search('configure\s*:\s*error', res):
+        raise Exception('%s配置pgpool出错!!!!!!' % remote_ip + '\n' + res)
     print("%s配置pgpool结束!!!!!!\n" % remote_ip + '%s开始编译pgpool......' % remote_ip)
     res = sf.exec_command('cd {0};make'.format(file), timeout=360)
     check_exec_command(res, 'make  all-am', '%s编译pgpool成功' % remote_ip, '%s编译pgpool失败' % remote_ip)
@@ -100,13 +92,15 @@ def compile_pgpool(local_file_path, remote_ip, username='root', passwd=''):
     res = sf.exec_command('cd {0};make install'.format(file), timeout=360)
     check_exec_command(res, 'Making install in include', '%s安装pgpool成功' % remote_ip, '%s安装pgpool失败' % remote_ip)
     print('%s编译pgpool扩展......' % remote_ip)
-    res = sf.exec_command('cd {0}/src/sql/pgpool-recovery;make'.format(file), timeout=360)
+    res = sf.exec_command('cd {0}/src/sql/pgpool-recovery;export PATH={1}/bin:$PATH;make'.format(file, setup['pgpath']),
+                          timeout=360)
     check_exec_command(res, 'pgpool-recovery.o|Nothing to be done', '%spgpool扩展编译成功' % remote_ip,
                        '%spgpool扩展编译失败' % remote_ip)
-    sf.exec_command('cd {0}/src/sql/pgpool-recovery;make install'.format(file), timeout=360)
-    res = stdout.read().decode() + stderr.read().decode()
-    if re.search('error', res):
-        raise Exception('%s安装pgpool扩展出错!!!!!!' % remote_ip, res)
+    res=sf.exec_command('cd {0}/src/sql/pgpool-recovery;export PATH={1}/bin:$PATH;make install'.format(file,setup['pgpath']),
+                    timeout=360)
+
+    check_exec_command(res, 'mkdir', '%s安装pgpool扩展成功' % remote_ip, '%s安装pgpool扩展失败' % remote_ip)
+
     print('%s安装pgpool结束!!!!!!' % remote_ip)
     sf.close()
 
@@ -137,7 +131,6 @@ def configure(remote_ip, username, passwd):
             print('添加pgpool环境变量')
             sf.execute('echo "export PATH={0}/bin:\$PATH" >> ~/.bash_profile'.format(setup['pgpoolpath']))
             sf.execute('source ~/.bash_profile')
-
     # 用postgres用户登录修改环境变量配置
     sf = ssh_connectionServer(remote_ip, setup['pgusername'], setup['postgrespasswd'])
     # 若环境变量中无所需变量，则加入环境变量中
