@@ -255,6 +255,8 @@ class PgpoolConfigure():
         sf.exec_command(sed_replace("syslog_facility = 'LOCAL0'", "syslog_facility = 'LOCAL1'", pgpool_conf))
         sf.exec_command(sed_replace("pid_file_name = '/var/run/pgpool/pgpool.pid'",
                                     "pid_file_name = '%s/pgpool.pid'" % self.pgpoolpath, pgpool_conf))
+        sf.exec_command(sed_replace("logdir = '/var/log/pgpool'",
+                                    "logdir = '%s'" % self.pgpoolpath, pgpool_conf))
         sf.exec_command(sed_replace("memqcache_oiddir = '/var/log/pgpool/oiddir'",
                                     "memqcache_oiddir = '%s/pgpool/oiddir'" % self.pgpoolpath, pgpool_conf))
 
@@ -267,6 +269,7 @@ class PgpoolConfigure():
         sf.exec_command(
             'echo "host    all             {0}             0.0.0.0/0            md5">>{1}/etc/pool_hba.conf'.format(
                 parameters['dbusername'], self.pgpoolpath))
+        print('%s修改配置文件pgpool.conf和pool_hba.conf成功' % server[0])
         sf.close()  # 关闭ssh连接对象
 
     def change_postgresql_conf_parameters(self, *server):
@@ -283,6 +286,9 @@ class PgpoolConfigure():
             sed_replace("#archive_command = ''", "archive_command ='cp %p {}/archivedir/%f'".format(self.pgpath),
                         postgresql_conf))
         sf.exec_command(sed_replace("#max_wal_senders = 10", "max_wal_senders = 10", postgresql_conf))
+        sf.exec_command(sed_replace("#max_replication_slots = 10", "max_replication_slots = 10", postgresql_conf))
+        sf.exec_command(sed_replace("#wal_level = replica", "wal_level = replica", postgresql_conf))
+
         # pg_hba.conf需要修改一个参数，就不单独写方法，添加到此方法一起就行了
         # 要配置子网掩码，将VIP拆分,IP的主机号变为0
         ip_list = parameters['delegate_ip'].split('.')[0:3]
@@ -308,7 +314,7 @@ class PgpoolConfigure():
         res = sf.exec_command(
             'export LD_LIBRARY_PATH={0}/lib:$LD_LIBRARY_PATH;{0}/bin/pg_isready -d {0}/data'.format(self.pgpath))
         check_exec_command(res, 'accepting connections', '%s数据库重启成功' % server[0], '%s数据库重启失败' % server[0])
-
+        print('%s修改postgresql.conf和pg_hba.conf文件成功' % server[0])
         sf.close()
 
     def create_shell_scripts(self, *server):
@@ -421,6 +427,8 @@ if __name__ == '__main__':
                                       parameters['pgpath'],
                                       parameters['pgpoolpath'],
                                       parameters['delegate_ip'])
+    # 先检查主控状态并启动主库
+    pgpoolconfiguer.check_data_status(parameters['primary_node_ip'], parameters['dbusername'], parameters['dbpasswd'])
     jobs = []
     for server_ip in [parameters['primary_node_ip'], parameters['standby01_node_ip'], parameters['standby02_node_ip']]:
         p = Process(target=pgpoolconfiguer.main,
@@ -432,7 +440,6 @@ if __name__ == '__main__':
         p.join()
 
     # 只对主控做的一些配置
-    pgpoolconfiguer.check_data_status(parameters['primary_node_ip'], parameters['dbusername'], parameters['dbpasswd'])
     pgpoolconfiguer.change_postgresql_conf_parameters(parameters['primary_node_ip'], parameters['dbusername'],
                                                       parameters['dbpasswd'])
     pgpoolconfiguer.create_extension(parameters['primary_node_ip'], parameters['dbusername'], parameters['dbpasswd'])
