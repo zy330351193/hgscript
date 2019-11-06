@@ -51,10 +51,11 @@ def compile(local_file_path, remote_ip, username='root', passwd=''):
     file = res.group(1)
     sf = ssh_connectionServer(remote_ip, username, passwd)
     print('%s开始configure配置......' % remote_ip)
-    stdin, stdout, stderr = sf.exec_command('cd {0};./configure --prefix={1}'.format(file, setup['pgpath']))
+    stdin, stdout, stderr = sf.exec_command(
+        'cd {0};./configure --prefix={1} --enable-nls="zh_CN zh_TW"'.format(file, setup['pgpath']))
     res = stdout.read().decode() + stderr.read().decode()
     if re.search('configure\s*:\s*error', res):
-        raise Exception('%s配置出错!!!!!!' % remote_ip, res)
+        raise Exception('%s配置出错!!!!!!\n' % remote_ip + res)
     print("%s配置结束!!!!!!\n" % remote_ip + '%s开始编译......' % remote_ip)
     res = sf.exec_command('cd {0};gmake world -j4'.format(file), timeout=360)
     check_exec_command(res, 'successfully.*Ready to install', '%s编译成功' % remote_ip, '%s编译失败' % remote_ip)
@@ -96,8 +97,9 @@ def compile_pgpool(local_file_path, remote_ip, username='root', passwd=''):
                           timeout=360)
     check_exec_command(res, 'pgpool-recovery.o|Nothing to be done', '%spgpool扩展编译成功' % remote_ip,
                        '%spgpool扩展编译失败' % remote_ip)
-    res=sf.exec_command('cd {0}/src/sql/pgpool-recovery;export PATH={1}/bin:$PATH;make install'.format(file,setup['pgpath']),
-                    timeout=360)
+    res = sf.exec_command(
+        'cd {0}/src/sql/pgpool-recovery;export PATH={1}/bin:$PATH;make install'.format(file, setup['pgpath']),
+        timeout=360)
 
     check_exec_command(res, 'mkdir', '%s安装pgpool扩展成功' % remote_ip, '%s安装pgpool扩展失败' % remote_ip)
 
