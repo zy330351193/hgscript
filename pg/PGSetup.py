@@ -35,6 +35,8 @@ def send_package(local_file_path, remote_ip, username='root', passwd=''):
 
         res = sf.exec_command('tar -zxvf %s' % file, timeout=180)
         check_exec_command(res, 'INSTALL', '%s解压完成!!!!!!' % remote_ip, '%s解压失败!!!!!!' % remote_ip)
+        print('%s删除压缩包'%remote_ip)
+        sf.exec_command('rm -rf %s'%file)
     sf.close()
 
 
